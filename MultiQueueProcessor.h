@@ -18,23 +18,28 @@
 #define __MULTITHREADPROCESSOR_H_63431C7A_ACF2_4A6F_AF3C_9870F10D2C43__
 //-------------------------------------------------------------------------//
 #include <map>
-#include <list>
+#include <deque>
 #include <atomic>
 #include <thread>
+#include <future>
 #include <mutex>
+#include <condition_variable>
 #include <functional>
 //-------------------------------------------------------------------------//
 #include "concurrency-queue.h"
-#include "concurrency-consumer.h"
+#include "concurrency-map.h"
 //-------------------------------------------------------------------------//
-#define MaxCapacity 1000
+#define MAXCAPACITY 1000
 //-------------------------------------------------------------------------//
 namespace multiqueue
 {
     template<typename Key, typename Value>
     struct IConsumer
     {
-        virtual auto Consume(Key id, const Value & value) -> void = 0;
+        using key_type = Key;
+        using value_type = Value;
+
+        virtual auto Consume(const Key & id, const Value & value) -> void = 0;
     };
 //-------------------------------------------------------------------------//
     template<typename Key, typename Value>
@@ -42,22 +47,26 @@ namespace multiqueue
     {
         using mutex_guard_t = std::unique_lock<std::mutex>;
         using concurrency_queue_t = multiqueue::concurrency_queue<Value>;
+        using consumers_t = concurrency::map<Key, IConsumer<Key, Value> *>;
+        using deque_t = std::deque<Value>;
+        using queues_t = std::map<Key, deque_t>;
 
     protected:
         //!< Keeps a map of consumers.
-        concurrency::map<Key, IConsumer<Key, Value> *> consumers;
+        consumers_t consumers;
         //!< Keeps a map of messages (key, messages).
-        std::map<Key, concurrency_queue_t> queues;
+        queues_t queues;
         //!< Keeps a flag of stopped or not.
-        volatile std::atomic_bool running;
-        std::mutex lock;
+        std::atomic_bool running;
+        mutable std::mutex lock;
+        std::condition_variable condition;
         std::thread thread;
 
     public:
         /**
          * Constructor.
          */
-        MultiQueueProcessor() : running(true), thread(std::bind(&MultiQueueProcessor::process, this))
+        MultiQueueProcessor() : running(true), thread(std::bind(&MultiQueueProcessor::onthread, std::ref(*this)))
         {
         }
 
@@ -78,64 +87,56 @@ namespace multiqueue
         auto StopProcessing() -> void
         {
             this->running = false;
+            this->condition.notify_all();
         }
 
         /**
-         *
-         * @param id
-         * @param consumer
+         * Adds a new subscriber to proceed.
+         * @param key [in] - A unique key of subscriber.
+         * @param consumer [in] - A consumer.
          */
-        auto Subscribe(Key id, IConsumer<Key, Value> * consumer) -> void
+        auto Subscribe(const Key & key, IConsumer<Key, Value> * consumer) -> void
         {
-            mutex_guard_t sync(this->lock);
+            assert(consumer != nullptr);
 
-            auto iter = this->consumers.find(id);
-
-            if (iter == this->consumers.end())
+            if (this->consumers.contains(key) != true && consumer != nullptr)
             {
-                this->consumers.insert({id, consumer});
+                this->consumers.insert({key, consumer});
             }
         }
 
         /**
-         *
-         * @param id
+         * Removes to support of subscriber.
+         * @param key [in] - A key of subscriber.
          */
-        void Unsubscribe(Key id)
+        void Unsubscribe(const Key & key)
         {
-            mutex_guard_t sync(this->lock);
-
-            auto iter = consumers.find(id);
-
-            if (iter != consumers.end()) { this->consumers.erase(id); }
+            this->consumers.erase(key);
         }
 
         /**
-         *
+         * Adds a new message for subscriber.
          * @param id
          * @param value
          */
-        void Enqueue(Key id, Value value)
+        void Enqueue(const Key & key, Value value)
         {
             mutex_guard_t sync(this->lock);
+            auto iter = this->queues.find(key);
 
-            auto iter = queues.find(id);
-
-            if (iter != queues.end())
+            if (iter != this->queues.end())
             {
-                if (iter->second.size() < MaxCapacity)
-                    iter->second.push_back(value);
+                if ((*iter).second.size() < MAXCAPACITY) { (*iter).second.push_back(std::move(value)); this->condition.notify_one(); }
             }
             else
             {
-                queues.insert(std::make_pair(id, std::list<Value>()));
-                iter = queues.find(id);
+                deque_t que;
+                // Adding the value.
+                que.push_back(std::move(value));
+                // Adding a new message into queue.
+                this->queues.insert({key, std::move(que)});
 
-                if (iter != queues.end())
-                {
-                    if (iter->second.size() < MaxCapacity)
-                        iter->second.push_back(value);
-                }
+                this->condition.notify_one();
             }
         }
 
@@ -144,42 +145,62 @@ namespace multiqueue
          * @param id
          * @return
          */
-        Value Dequeue(Key id)
+        auto Dequeue(const Key & key) -> Value
+        {
+            Value value;
+            mutex_guard_t sync(this->lock);
+
+            if (this->queues.empty() != true)
+            {
+                auto iter = this->queues.find(key);
+
+                if (iter != this->queues.end() && (*iter).second.empty() != true)
+                {
+                    value = std::move((*iter).second.front());
+                    // Removing the first element.
+                    (*iter).second.pop_front();
+                }
+            }
+            return std::move(value);
+        }
+
+        auto Empty() const -> bool
         {
             mutex_guard_t sync(this->lock);
 
-            auto iter = queues.find(id);
-
-            if (iter != queues.end())
-            {
-                if (iter->second.size() > 0)
-                {
-                    auto front = iter->second.front();
-                    iter->second.pop_front();
-                    return front;
-                }
-            }
-            return Value {};
+            return this->queues.empty();
         }
 
     protected:
         //!<
-        auto process() -> void
+        auto onthread() -> void
         {
-            while (this->running)
+            while (this->running != false)
             {
-                mutex_guard_t sync(this->lock);
-
-                for (auto iter = queues.begin(); iter != queues.end(); ++iter)
+                try
                 {
-                    auto consumerIter = consumers.find(iter->first);
+                    this->consumers.for_each([this](const typename consumers_t::value_type & consumer) -> void {
 
-                    if (consumerIter != consumers.end())
-                    {
-                        Value front = Dequeue(iter->first);
-                        if (front != Value {})
-                            consumerIter->second->Consume(iter->first, front);
-                    }
+                        if (this->Empty() != true)
+                        {
+                            auto async = std::async(std::launch::async, [this, &consumer]() {
+                                try
+                                {
+                                    // Getting a value.
+                                    auto value = this->Dequeue(consumer.first);
+                                    // Forwarding the message.
+                                    consumer.second->Consume(consumer.first, value);
+                                }
+                                catch (const std::exception & exc)
+                                {
+                                    std::cerr << "[ERROR] " << exc.what() << std::endl;
+                                }
+                            });
+                        }
+                    });
+                }
+                catch (const std::exception &)
+                {
                 }
             }
         }

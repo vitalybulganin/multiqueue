@@ -17,7 +17,7 @@
 #ifndef __CONCURRENCY_QUEUE_H_C46D5A08_CE49_4086_9105_1372D71F64D5__
 #define __CONCURRENCY_QUEUE_H_C46D5A08_CE49_4086_9105_1372D71F64D5__
 //-------------------------------------------------------------------------//
-#include <vector>
+#include <deque>
 #include <mutex>
 #include <atomic>
 //-------------------------------------------------------------------------//
@@ -27,11 +27,11 @@ namespace multiqueue
     template<typename TMessage>
     class concurrency_queue final
     {
-        using mutex_guard_t = std::lock_guard<std::mutex>;
+        using mutex_guard_t = std::unique_lock<std::mutex>;
         //!< Keeps max count of messages.
         std::atomic<size_t> capacity;
         //!< Keeps a list of messages.
-        std::vector<TMessage> queue;
+        std::deque<TMessage> queue;
         //!< Keeps a mutex.
         mutable std::mutex lock;
 
@@ -61,7 +61,7 @@ namespace multiqueue
          * Adds a new message into queue.
          * @param message [in] - A new message.
          */
-        auto push(const TMessage & message) -> void
+        auto enqueue(const TMessage & message) -> void
         {
             if (this->size() >= this->capacity) { throw (std::out_of_range("Too many messages in the queue.")); }
 
@@ -75,16 +75,19 @@ namespace multiqueue
          * @return The first message.
          * @throw std::out_of_range - No one message found.
          */
-        auto pop() -> TMessage
+        auto dequeue() -> TMessage
         {
             if (this->empty() != false) { throw (std::out_of_range("No one message found.")); }
 
-            mutex_guard_t sync(this->lock);
-
-            auto message = *this->queue.begin();
-            this->queue.erase(this->queue.begin());
-
-            return std::move(message);
+            TMessage object;
+            {
+                mutex_guard_t sync(this->lock);
+                // Getting the first element.
+                object = std::move(this->queue.front());
+                // Removing the first element.
+                this->queue.pop_front();
+            }
+            return std::move(object);
         }
 
         /**

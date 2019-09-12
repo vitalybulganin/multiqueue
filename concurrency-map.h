@@ -33,7 +33,6 @@ namespace multiqueue
         {
             using mutex_lock_t = std::lock_guard<std::mutex>;
             using objects_t = std::map<Key, Value>;
-            using value_type = typename std::map<Key, Value>::value_type;
             using iterator = typename objects_t::iterator;
 
             friend class MultiQueueProcessor;
@@ -41,6 +40,9 @@ namespace multiqueue
             objects_t objects;
             //!< Keeps a mutex.
             mutable std::mutex lock;
+
+        public:
+            using value_type = typename std::map<Key, Value>::value_type;
 
         public:
             map(const map &) = delete;
@@ -67,24 +69,25 @@ namespace multiqueue
              *
              * @param value
              */
-            auto insert(const Key & key, Value value) -> void
+            auto insert(const std::pair<Key, Value> & value) -> void
             {
                 iterator iter;
                 {
                     mutex_lock_t sync(this->lock);
-                    iter = this->objects.find(key);
+                    iter = this->objects.find(value.first);
                 }
                 if (iter == this->objects.end())
                 {
                     {
                         mutex_lock_t sync(this->lock);
 
-                        this->objects.insert(std::make_pair(key, typeof(Value)));
-                        iter = this->objects.find(key);
+                        this->objects.insert(value);
                     }
-                    this->objects[key].push_back(value);
                 }
-                (*iter).second.push_back(value);
+                else
+                {
+                    (*iter).second = value.second;
+                }
             }
 
             /**
@@ -134,6 +137,25 @@ namespace multiqueue
                 mutex_lock_t sync(this->lock);
 
                 return this->objects.find(key) != this->objects.end();
+            }
+
+            /**
+             *
+             * @param callback
+             */
+            auto for_each(const std::function<void(const value_type & value)> & callback) -> void
+            {
+                iterator begin, end;
+                {
+                    mutex_lock_t sync(this->lock);
+                    // Getting the first element.
+                    begin = this->objects.begin();
+                    end = this->objects.end();
+                }
+                for (; begin != end; ++begin)
+                {
+                    callback(*begin);
+                }
             }
         };
 //-------------------------------------------------------------------------//
