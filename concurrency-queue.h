@@ -74,7 +74,7 @@ namespace multiqueue
                     while (this->cond->wait_for(sync, std::chrono::microseconds(10)) != std::cv_status::timeout)
                     {
                     }
-                    //<????> throw (std::out_of_range("Too many messages in the queue [" + std::to_string(this->size()) + "]"));
+                    //<???> throw (std::out_of_range("Too many messages in the queue [" + std::to_string(this->size()) + "]"));
                 }
                 // Adding a message into collection.
                 this->messages.push_back(message);
