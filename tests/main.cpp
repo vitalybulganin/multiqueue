@@ -1,8 +1,8 @@
 /*!==========================================================================
 * \file
-* - Program:       gtest-mmt-grpc
+* - Program:       gtest-multiqueue
 * - File:          main.cpp
-* - Created:       11/23/2018
+* - Created:       09/14/2019
 * - Author:        Vitaly Bulganin
 * - Description:
 * - Comments:
@@ -18,6 +18,8 @@
 #include <gtest/gtest.h>
 //-------------------------------------------------------------------------//
 #include "units/gtest-queue.h"
+#include "units/gtest-map.h"
+#include "units/gtest-processor.h"
 //-------------------------------------------------------------------------//
 int main(int argc, char ** argv)
 {

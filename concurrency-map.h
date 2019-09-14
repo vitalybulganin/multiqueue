@@ -22,20 +22,15 @@
 //-------------------------------------------------------------------------//
 namespace multiqueue
 {
-    template<typename Key, typename Value>
-    class MultiQueueProcessor;
-
     namespace concurrency
     {
 //-------------------------------------------------------------------------//
         template<typename Key, typename Value>
         class map final
         {
-            using mutex_lock_t = std::lock_guard<std::mutex>;
+            using mutex_lock_t = std::unique_lock<std::mutex>;
             using objects_t = std::map<Key, Value>;
             using iterator = typename objects_t::iterator;
-
-            friend class MultiQueueProcessor;
             //!< Keeps a map of objects.
             objects_t objects;
             //!< Keeps a mutex.
@@ -84,10 +79,6 @@ namespace multiqueue
                         this->objects.insert(value);
                     }
                 }
-                else
-                {
-                    (*iter).second = value.second;
-                }
             }
 
             /**
@@ -99,6 +90,28 @@ namespace multiqueue
                 mutex_lock_t sync(this->lock);
 
                 this->objects.erase(key);
+            }
+
+            /**
+             *
+             * @return
+             */
+            auto empty() const
+            {
+                mutex_lock_t sync(this->lock);
+
+                return this->objects.empty();
+            }
+
+            /**
+             *
+             * @return
+             */
+            auto size() const
+            {
+                mutex_lock_t sync(this->lock);
+
+                return this->objects.size();
             }
 
             /**
@@ -132,7 +145,7 @@ namespace multiqueue
              * @param key
              * @return
              */
-            auto contains(const Key & key) -> bool
+            auto contains(const Key & key) const -> bool
             {
                 mutex_lock_t sync(this->lock);
 

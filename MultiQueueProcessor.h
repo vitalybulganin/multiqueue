@@ -46,10 +46,9 @@ namespace multiqueue
     class MultiQueueProcessor final
     {
         using mutex_guard_t = std::unique_lock<std::mutex>;
-        using concurrency_queue_t = multiqueue::concurrency_queue<Value>;
         using consumers_t = concurrency::map<Key, IConsumer<Key, Value> *>;
-        using deque_t = std::deque<Value>;
-        using queues_t = std::map<Key, deque_t>;
+        using deque_t = concurrency::queue<Value>;
+        using queues_t = concurrency::map<Key, deque_t>;
 
     protected:
         //!< Keeps a map of consumers.
@@ -58,8 +57,6 @@ namespace multiqueue
         queues_t queues;
         //!< Keeps a flag of stopped or not.
         std::atomic_bool running;
-        mutable std::mutex lock;
-        std::condition_variable condition;
         std::thread thread;
 
     public:
@@ -87,7 +84,6 @@ namespace multiqueue
         auto StopProcessing() -> void
         {
             this->running = false;
-            this->condition.notify_all();
         }
 
         /**
@@ -121,58 +117,73 @@ namespace multiqueue
          */
         void Enqueue(const Key & key, Value value)
         {
-            mutex_guard_t sync(this->lock);
-            auto iter = this->queues.find(key);
-
-            if (iter != this->queues.end())
+            try
             {
-                if ((*iter).second.size() < MAXCAPACITY) { (*iter).second.push_back(std::move(value)); this->condition.notify_one(); }
-            }
-            else
-            {
-                deque_t que;
-                // Adding the value.
-                que.push_back(std::move(value));
+                auto & queue = this->queues.find(key);
                 // Adding a new message into queue.
-                this->queues.insert({key, std::move(que)});
-
-                this->condition.notify_one();
+                queue.enqueue(std::move(value));
+            }
+            catch (const std::invalid_argument &)
+            {// No data found.
+                try
+                {
+                    deque_t que(MAXCAPACITY);
+                    // Adding the value.
+                    que.enqueue(std::move(value));
+                    // Adding a new message into queue.
+                    this->queues.insert({key, std::move(que)});
+                }
+                catch (const std::out_of_range & exc)
+                {
+                    std::clog << exc.what() << std::endl;
+                }
             }
         }
 
         /**
-         *
-         * @param id
-         * @return
+         * Gets the first message from the queue of subscriber.
+         * @param key [in] - A subscriber key or id.
+         * @return A message.
+         * @throw std::invalid_argument - No one message found.
          */
         auto Dequeue(const Key & key) -> Value
         {
-            Value value;
-            mutex_guard_t sync(this->lock);
-
             if (this->queues.empty() != true)
             {
-                auto iter = this->queues.find(key);
+                auto & queue = this->queues.find(key);
 
-                if (iter != this->queues.end() && (*iter).second.empty() != true)
+                if (queue.empty() != true)
                 {
-                    value = std::move((*iter).second.front());
-                    // Removing the first element.
-                    (*iter).second.pop_front();
+                    return std::move(queue.dequeue());
                 }
             }
-            return std::move(value);
+            throw (std::invalid_argument("No one message found"));
         }
 
-        auto Empty() const -> bool
+        /**
+         * Waits for finishing a thread.
+         */
+        auto Wait() -> void
         {
-            mutex_guard_t sync(this->lock);
+           if (this->thread.joinable()) { this->thread.join(); }
+        }
 
-            return this->queues.empty();
+        /**
+         * Gets a count of messages in the queue.
+         * @param key [in] - A key of consumer.
+         * @return A count of messages.
+         */
+        auto Size(const Key & key) -> size_t
+        {
+            if (this->queues.contains(key) != false)
+            {
+                return this->queues.find(key).size();
+            }
+            return 0;
         }
 
     protected:
-        //!<
+        //!< A thread function, which proceeds messages from queue.
         auto onthread() -> void
         {
             while (this->running != false)
@@ -181,15 +192,19 @@ namespace multiqueue
                 {
                     this->consumers.for_each([this](const typename consumers_t::value_type & consumer) -> void {
 
-                        if (this->Empty() != true)
+                        if (this->queues.empty() != true)
                         {
                             auto async = std::async(std::launch::async, [this, &consumer]() {
+
                                 try
                                 {
                                     // Getting a value.
                                     auto value = this->Dequeue(consumer.first);
                                     // Forwarding the message.
                                     consumer.second->Consume(consumer.first, value);
+                                }
+                                catch (const std::invalid_argument &)
+                                {
                                 }
                                 catch (const std::exception & exc)
                                 {
