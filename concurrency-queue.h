@@ -91,7 +91,6 @@ namespace multiqueue
 
                 TMessage object;
                 {
-                    mutex_guard_t sync(*this->lock);
                     // Getting the first element.
                     object = std::move(this->messages.front());
                     // Removing the first element.

@@ -52,7 +52,7 @@ TEST(TestQueue, multiqueue)
 
     processor.Subscribe("1", consumers[0].get());
     processor.Subscribe("2", consumers[1].get());
-    processor.Subscribe("10", consumers[1].get());
+    processor.Subscribe("3", consumers[1].get());
 
     std::thread producer1([](queue_processor_t & processor) -> void {
         for (auto i = 0; i < 1000; ++i)
@@ -66,7 +66,6 @@ TEST(TestQueue, multiqueue)
             processor.Enqueue("2", std::to_string(i));
         }
     }, std::ref(processor));
-
     std::thread manager([](queue_processor_t & processor) -> void {
         static std::string s_keys[2] = {"1", "2"};
 
